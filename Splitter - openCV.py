@@ -1,145 +1,190 @@
-# =========================
-# 1. OPENCV + DIALOGS STYLE
-# =========================
-
 import cv2
 import numpy as np
 from tkinter import Tk, filedialog, simpledialog
 import os
 
-# === Setup ===
 Tk().withdraw()
-img_paths = filedialog.askopenfilenames(title="Select Images", filetypes=[("Image Files", "*.png;*.jpg;*.jpeg")])
-if not img_paths:
-    print("No images selected.")
+path = filedialog.askopenfilename(title="Select an Image", filetypes=[("Image Files", "*.png;*.jpg;*.jpeg")])
+if not path:
+    print("No file selected.")
     exit()
 
-out_dir = filedialog.askdirectory(title="Select Output Folder")
-if not out_dir:
-    print("No output folder selected.")
+img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+if img is None:
+    print("Failed to load image.")
     exit()
 
-fmt = simpledialog.askstring("Save Format", "Enter file format (png/jpg):", initialvalue="png")
-if fmt not in ('png', 'jpg'):
-    fmt = 'png'
+clone = img.copy()
+hlines = []
+vlines = []
+selected = None
+hover_threshold = 5
+snap_size = 10
+has_alpha = True if img.shape[2] == 4 else False
+mouse_x, mouse_y = -1, -1
+show_cursor_guides = True
 
-# === Start Processing ===
-for path in img_paths:
-    base_img = cv2.imread(path)
-    if base_img is None:
-        print(f"Failed to load {path}")
-        continue
+def MakeChecker(w, h):
+    blk = 10
+    bg = np.zeros((h, w, 3), dtype=np.uint8)
+    for y in range(0, h, blk):
+        for x in range(0, w, blk):
+            color = 200 if (x // blk + y // blk) % 2 == 0 else 255
+            bg[y:y+blk, x:x+blk] = color
+    return bg
 
-    # Add padding of 5 pixels
-    clone = cv2.copyMakeBorder(base_img, 5, 5, 5, 5, cv2.BORDER_CONSTANT, value=[255, 255, 255])
-    orig_h, orig_w = clone.shape[:2]
-    hlines, vlines = [], []
+def Snap(val):
+    return int(round(val / snap_size) * snap_size)
+
+def Redraw():
+    global img
     img = clone.copy()
-    selected_line = [None]  # wrap in list to allow modification in nested functions
 
-    def redraw():
-        global img
-        img = clone.copy()
-        for i, y in enumerate(hlines):
-            color = (0, 255, 0) if selected_line[0] == ('h', i) else (0, 0, 255)
-            cv2.line(img, (0, y), (img.shape[1], y), color, 1)
-        for i, x in enumerate(vlines):
-            color = (0, 255, 0) if selected_line[0] == ('v', i) else (255, 0, 0)
-            cv2.line(img, (x, 0), (x, img.shape[0]), color, 1)
+    for i, y in enumerate(hlines):
+        clr = (0, 255, 0, 255) if selected == ('h', i) else (0, 0, 255, 255)
+        cv2.line(img, (0, y), (img.shape[1], y), clr, 1)
+    for i, x in enumerate(vlines):
+        clr = (0, 255, 0, 255) if selected == ('v', i) else (255, 0, 0, 255)
+        cv2.line(img, (x, 0), (x, img.shape[0]), clr, 1)
 
-        # Fixed aspect ratio
-        screen_h, screen_w = 720, 1280
-        scale = min(screen_w / orig_w, screen_h / orig_h)
-        w = int(orig_w * scale)
-        h = int(orig_h * scale)
-        resized = cv2.resize(img, (w, h))
-        cv2.imshow("Splitter", resized)
+    if show_cursor_guides and 0 <= mouse_x < img.shape[1] and 0 <= mouse_y < img.shape[0]:
+        cv2.line(img, (mouse_x, 0), (mouse_x, img.shape[0]), (150, 150, 150, 255), 1)
+        cv2.line(img, (0, mouse_y), (img.shape[1], mouse_y), (150, 150, 150, 255), 1)
 
-    def click_event(event, x, y, flags, param):
-        screen_h, screen_w = 720, 1280
-        scale = min(screen_w / orig_w, screen_h / orig_h)
-        x = int(x / scale)
-        y = int(y / scale)
+    if has_alpha:
+        alpha = img[:, :, 3] / 255.0
+        rgb = img[:, :, :3].astype(np.float32)
+        bg = MakeChecker(img.shape[1], img.shape[0]).astype(np.float32)
+        blended = (rgb * alpha[..., None] + bg * (1 - alpha[..., None])).astype(np.uint8)
+        cv2.imshow("Image Splitter", blended)
+    else:
+        cv2.imshow("Image Splitter", img)
 
-        if event == cv2.EVENT_LBUTTONDOWN:
-            for i, ly in enumerate(hlines):
-                if abs(ly - y) <= 5:
-                    selected_line[0] = ('h', i)
-                    redraw()
-                    return
-            hlines.append(y)
-            selected_line[0] = ('h', len(hlines) - 1)
-            redraw()
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            for i, lx in enumerate(vlines):
-                if abs(lx - x) <= 5:
-                    selected_line[0] = ('v', i)
-                    redraw()
-                    return
-            vlines.append(x)
-            selected_line[0] = ('v', len(vlines) - 1)
-            redraw()
+def ClickEvt(event, x, y, flags, param):
+    global selected, mouse_x, mouse_y
+    mouse_x, mouse_y = x, y
+    if event == cv2.EVENT_MOUSEMOVE:
+        Redraw()
+    elif event == cv2.EVENT_LBUTTONDOWN:
+        y = Snap(y)
+        for i, ly in enumerate(hlines):
+            if abs(ly - y) <= hover_threshold:
+                selected = ('h', i)
+                Redraw()
+                return
+        hlines.append(y)
+        selected = ('h', len(hlines) - 1)
+        Redraw()
+    elif event == cv2.EVENT_RBUTTONDOWN:
+        x = Snap(x)
+        for i, lx in enumerate(vlines):
+            if abs(lx - x) <= hover_threshold:
+                selected = ('v', i)
+                Redraw()
+                return
+        vlines.append(x)
+        selected = ('v', len(vlines) - 1)
+        Redraw()
 
-    cv2.namedWindow("Splitter", cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback("Splitter", click_event)
-    redraw()
+cv2.namedWindow("Image Splitter", cv2.WINDOW_NORMAL)
+cv2.setMouseCallback("Image Splitter", ClickEvt)
+Redraw()
 
-    print(f"\nImage: {os.path.basename(path)}")
-    print("Click to add lines. Arrows to move. 'z' to undo. 's' to split. 'q' to skip.")
+print("\nInstructions:")
+print("• Left-click: add/select horizontal line (snaps to grid)")
+print("• Right-click: add/select vertical line (snaps to grid)")
+print("• Arrows: move selected line")
+print("• '+' / '-' to adjust snap size")
+print("• 'c' = toggle cursor guides ON/OFF")
+print("• 'u' = undo last line")
+print("• 'Del' = delete selected line")
+print("• 'a' = auto split into N×M")
+print("• 's' = split & save")
+print("• 'q' = quit\n")
 
-    while True:
-        k = cv2.waitKey(0) & 0xFF
-        if k == ord('q'):
-            break
-        elif k == ord('s'):
-            h = sorted(set(hlines))
-            v = sorted(set(vlines))
-            h = [0] + h + [clone.shape[0]]
-            v = [0] + v + [clone.shape[1]]
-            regions = []
-            for i in range(len(h) - 1):
-                for j in range(len(v) - 1):
-                    y1, y2 = h[i], h[i + 1]
-                    x1, x2 = v[j], v[j + 1]
-                    regions.append(clone[y1:y2, x1:x2])
-            labels = []
-            for i, r in enumerate(regions):
-                win = f"Region Preview - {i}"
-                cv2.imshow(win, r)
-                cv2.waitKey(1)
-                lbl = simpledialog.askstring("Label", f"Enter label for region {i} (preview shown):")
-                labels.append(lbl if lbl else f"unknown_{i}")
-                cv2.destroyWindow(win)
-            for i, (r, lbl) in enumerate(zip(regions, labels)):
-                save_path = os.path.join(out_dir, f"{lbl}.{fmt}")
-                cv2.imwrite(save_path, r)
-            break
-        elif k == ord('z'):
-            if selected_line[0]:
-                t, i = selected_line[0]
-                if t == 'h' and 0 <= i < len(hlines):
-                    hlines.pop(i)
-                elif t == 'v' and 0 <= i < len(vlines):
-                    vlines.pop(i)
-                selected_line[0] = None
-                redraw()
-        elif selected_line[0]:
-            t, i = selected_line[0]
-            if t == 'h' and 0 <= i < len(hlines):
-                if k == 82: hlines[i] = max(0, hlines[i] - 1)
-                elif k == 84: hlines[i] = min(img.shape[0] - 1, hlines[i] + 1)
-            elif t == 'v' and 0 <= i < len(vlines):
-                if k == 81: vlines[i] = max(0, vlines[i] - 1)
-                elif k == 83: vlines[i] = min(img.shape[1] - 1, vlines[i] + 1)
-            redraw()
+while True:
+    k = cv2.waitKey(20) & 0xFF
+    if k == ord('q'):
+        break
 
-    cv2.destroyAllWindows()
+    elif k == ord('c'):
+        show_cursor_guides = not show_cursor_guides
+        print(f"[Cursor Guide Lines] {'ON' if show_cursor_guides else 'OFF'}")
+        Redraw()
 
-# =========================
-# 2. FULL TKINTER GUI (WIP)
-# =========================
+    elif k == ord('u'):
+        if selected:
+            t, i = selected
+            if t == 'h' and hlines:
+                hlines.pop(i)
+            elif t == 'v' and vlines:
+                vlines.pop(i)
+            selected = None
+            Redraw()
 
-# If you'd like, I can now build a full GUI version using `tkinter.Canvas` with embedded image, buttons, and line drawing.
-# It will support all the above features with an actual UI for undo/save/etc.
+    elif k == 127:  # Del key
+        if selected:
+            t, i = selected
+            if t == 'h' and i < len(hlines):
+                hlines.pop(i)
+            elif t == 'v' and i < len(vlines):
+                vlines.pop(i)
+            selected = None
+            Redraw()
 
-# Would you like to proceed with the full GUI build (buttons, canvas, entry boxes)?
+    elif k == ord('a'):
+        try:
+            n = simpledialog.askinteger("Grid Rows", "Enter number of rows:")
+            m = simpledialog.askinteger("Grid Columns", "Enter number of columns:")
+            if not n or not m: continue
+            hlines = [int(clone.shape[0] * i / n) for i in range(1, n)]
+            vlines = [int(clone.shape[1] * j / m) for j in range(1, m)]
+            selected = None
+            Redraw()
+        except:
+            pass
+
+    elif k == ord('s'):
+        save_dir = filedialog.askdirectory(title="Select Folder to Save Image Parts")
+        if not save_dir:
+            print("No folder selected.")
+            continue
+
+        hs = sorted(set(hlines))
+        vs = sorted(set(vlines))
+        hs = [0] + hs + [clone.shape[0]]
+        vs = [0] + vs + [clone.shape[1]]
+
+        cnt = 0
+        for i in range(len(hs) - 1):
+            for j in range(len(vs) - 1):
+                y1, y2 = hs[i], hs[i + 1]
+                x1, x2 = vs[j], vs[j + 1]
+                part = clone[y1:y2, x1:x2]
+                if part.size > 0:
+                    name = f'row{i}_col{j}.png'
+                    path = os.path.join(save_dir, name)
+                    cv2.imwrite(path, part, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+                    cnt += 1
+        print(f"Saved {cnt} parts to: {save_dir}")
+        break
+
+    elif k == ord('+') or k == ord('='):
+        snap_size += 5
+        print(f"[+] Snap size: {snap_size}px")
+
+    elif k == ord('-') and snap_size > 1:
+        snap_size = max(1, snap_size - 5)
+        print(f"[-] Snap size: {snap_size}px")
+
+    elif selected:
+        t, i = selected
+        if t == 'h':
+            if k == 82: hlines[i] = max(0, hlines[i] - snap_size)
+            elif k == 84: hlines[i] = min(img.shape[0] - 1, hlines[i] + snap_size)
+        elif t == 'v':
+            if k == 81: vlines[i] = max(0, vlines[i] - snap_size)
+            elif k == 83: vlines[i] = min(img.shape[1] - 1, vlines[i] + snap_size)
+        Redraw()
+
+cv2.destroyAllWindows()
