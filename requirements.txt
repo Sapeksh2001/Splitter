@@ -1,0 +1,13 @@
+# Image Splitter — OpenCV
+# Python 3.10+
+
+# Computer-vision core (window, drawing, image I/O)
+opencv-python>=4.8.0
+
+# Numerical array operations (alpha blending, checker generation)
+numpy>=1.24.0
+
+# tkinter is part of the Python standard library.
+# On some Linux distros it must be installed separately via the OS package manager:
+#   sudo apt install python3-tk      # Debian / Ubuntu
+#   sudo dnf install python3-tkinter # Fedora
